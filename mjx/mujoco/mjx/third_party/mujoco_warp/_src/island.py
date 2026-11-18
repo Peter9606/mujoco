@@ -795,7 +795,7 @@ def direct_dsu(m: types.Model, d: types.Data, island_parent: wp.array2d[int]):
       d.tree_island,
       island_parent,
     ],
-    block_dim=types.BlockDim.island_dsu,
+    block_dim=m.block_dim.island_dsu,
   )
   wp.launch(
     _compress_roots,

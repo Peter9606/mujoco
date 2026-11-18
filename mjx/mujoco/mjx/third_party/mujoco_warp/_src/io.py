@@ -705,7 +705,8 @@ def put_model(mjm: mujoco.MjModel, batch_sizes: dict[str, int] | None = None) ->
   # warp only fields
   opt.broadphase = types.BroadphaseType.NXN
   opt.broadphase_filter = types.BroadphaseFilter.PLANE | types.BroadphaseFilter.SPHERE | types.BroadphaseFilter.OBB
-  opt.graph_conditional = True
+  # CoreX (CUDA 10.2) lacks CUDA 12.4 conditional graph nodes.
+  opt.graph_conditional = not (wp.get_device().is_cuda and wp.get_device().runtime.is_iluvatar)
   opt.run_collision_detection = True
   opt.warn_overflow = int(types.OverflowType.ALL)
   opt.deterministic = int(types.DeterminismType.NONE)
@@ -905,9 +906,14 @@ def put_model(mjm: mujoco.MjModel, batch_sizes: dict[str, int] | None = None) ->
   m.has_2d_flex = bool(mjm.nflex > 0 and np.any(mjm.flex_dim == 2))
   m.has_3d_flex = bool(mjm.nflex > 0 and np.any(mjm.flex_dim == 3))
   m.max_flex_dim = int(np.max(mjm.flex_dim)) if mjm.nflex > 0 else 0
+  _warp_size = 64 if (wp.get_device().is_cuda and wp.get_device().runtime.is_iluvatar) else 32
   m.block_dim = types.BlockDim()
-  # Derive CG solver block_dim from nv: clamp(round_up_to_32(nv), 32, 256)
-  _nv_block = max(32, min(256, ((mjm.nv + 31) // 32) * 32))
+  if _warp_size > 32:
+    for _f in dataclasses.fields(types.BlockDim):
+      if getattr(m.block_dim, _f.name) < _warp_size:
+        setattr(m.block_dim, _f.name, _warp_size)
+  # Derive CG solver block_dim from nv: clamp(round_up_to_warp(nv), warp_size, 256)
+  _nv_block = max(_warp_size, min(256, ((mjm.nv + _warp_size - 1) // _warp_size) * _warp_size))
   m.block_dim.update_gradient_grad = _nv_block
   m.block_dim.solve_beta_accumulate = _nv_block
   m.block_dim.solve_search_update_cg = _nv_block

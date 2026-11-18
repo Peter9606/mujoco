@@ -169,7 +169,7 @@ def cache_kernel(func):
 
 def check_toolkit_driver():
   wp.init()
-  if wp.get_device().is_cuda:
+  if wp.get_device().is_cuda and not wp.get_device().runtime.is_iluvatar:
     if not wp.is_conditional_graph_supported():
       warnings.warn(
         """

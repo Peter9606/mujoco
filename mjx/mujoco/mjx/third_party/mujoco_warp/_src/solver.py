@@ -3548,7 +3548,7 @@ def _cholesky_factorize_solve(
       dim=(d.nworld, npairs),
       inputs=[ctx.done, ctx.h, quad_changed, state_changed],
       outputs=[ctx.h_tile_nz],
-      block_dim=32,
+      block_dim=64 if (wp.get_device().is_cuda and wp.get_device().runtime.is_iluvatar) else 32,
     )
     wp.launch(
       _symbolic_h_tile_cholesky(ntiles, skip_unchanged, skip_noflip),

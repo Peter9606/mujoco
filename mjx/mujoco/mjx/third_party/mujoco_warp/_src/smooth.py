@@ -4173,7 +4173,8 @@ def _solve_blocks(
     else:
       # The triangular back-substitution is largely sequential, so large blocks prefer fewer threads
       # for better occupancy while moderate blocks still want a couple warps (16/27->64, 60->32).
-      block_dim = m.block_dim.cholesky_solve if tile.size <= 40 else 32
+      _min_block = 64 if (wp.get_device().is_cuda and wp.get_device().runtime.is_iluvatar) else 32
+      block_dim = m.block_dim.cholesky_solve if tile.size <= 40 else _min_block
       wp.launch_tiled(
         _tile_cholesky_solve_block(tile),
         dim=(d.nworld, tile.adr.size),
