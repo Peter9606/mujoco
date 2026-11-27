@@ -1201,20 +1201,28 @@ class TileSet:
     adr: address of each tile in the set
     size: size of all the tiles in this set
     elemid: flat CSR gather indices for tiled blocks; empty selects the native-layout scalar path
+    packed_tri: if True, every block's ``elemid`` is an affine packed upper/lower
+      triangle (``base + j*(j+1)/2 + i`` for ``i <= j``). Densify can then load the
+      contiguous packed segment instead of gathering ``size**2`` indexed slots.
   """
 
   adr: wp.array[int]
   size: int
   elemid: wp.array[int] = dataclasses.field(default_factory=lambda: wp.array([], dtype=int))
+  packed_tri: bool = False
 
   def __eq__(self, other) -> bool:
     if self.__class__ is not other.__class__:
       return NotImplemented
-    return self.size == other.size and np.array_equal(np.asarray(self.adr.numpy()), np.asarray(other.adr.numpy()))
+    return (
+      self.size == other.size
+      and self.packed_tri == other.packed_tri
+      and np.array_equal(np.asarray(self.adr.numpy()), np.asarray(other.adr.numpy()))
+    )
 
   def __hash__(self) -> int:
     adr = np.asarray(self.adr.numpy())
-    return hash((self.size, adr.dtype.str, adr.shape, adr.tobytes()))
+    return hash((self.size, self.packed_tri, adr.dtype.str, adr.shape, adr.tobytes()))
 
 
 @dataclasses.dataclass
