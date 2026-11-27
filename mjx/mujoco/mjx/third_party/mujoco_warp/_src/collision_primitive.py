@@ -140,7 +140,12 @@ def plane_convex(plane_normal: wp.vec3, plane_pos: wp.vec3, convex: Geom, margin
 
     prev = int(-1)
     imax = int(0)
-    max_support = wp.dot(local_dir, convex.vert[convex.vertadr + convex.graph[vert_globalid + 0]])
+    if convex.extrema_meshid >= 0:
+      cx = wp.where(local_dir[0] > 0.4, 1, 0) - wp.where(local_dir[0] < -0.4, 1, 0) + 1
+      cy = wp.where(local_dir[1] > 0.4, 1, 0) - wp.where(local_dir[1] < -0.4, 1, 0) + 1
+      cz = wp.where(local_dir[2] > 0.4, 1, 0) - wp.where(local_dir[2] < -0.4, 1, 0) + 1
+      imax = convex.extrema[convex.extrema_meshid, cx * 9 + cy * 3 + cz]
+    max_support = wp.dot(local_dir, convex.vert[convex.vertadr + convex.graph[vert_globalid + imax]])
     while imax != prev:
       prev = imax
       i = convex.graph[vert_edgeadr + imax]
@@ -1306,6 +1311,7 @@ def _primitive_narrowphase(primitive_collisions_types, primitive_collisions_func
     mesh_graphadr: wp.array[int],
     mesh_vert: wp.array[wp.vec3],
     mesh_graph: wp.array[int],
+    mesh_extrema: wp.array2d[int],
     mesh_polynum: wp.array[int],
     mesh_polyadr: wp.array[int],
     mesh_polynormal: wp.array[wp.vec3],
@@ -1391,6 +1397,7 @@ def _primitive_narrowphase(primitive_collisions_types, primitive_collisions_func
       mesh_graphadr,
       mesh_vert,
       mesh_graph,
+      mesh_extrema,
       mesh_polynum,
       mesh_polyadr,
       mesh_polynormal,
@@ -1500,6 +1507,7 @@ def primitive_narrowphase(m: Model, d: Data, ctx: CollisionContext, collision_ta
       m.mesh_graphadr,
       m.mesh_vert,
       m.mesh_graph,
+      m.mesh_extrema,
       m.mesh_polynum,
       m.mesh_polyadr,
       m.mesh_polynormal,

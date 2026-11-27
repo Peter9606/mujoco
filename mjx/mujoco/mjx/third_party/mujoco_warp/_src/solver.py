@@ -935,6 +935,7 @@ def _linesearch_iterative_kernel(
   is_sparse: bool,
   incremental: bool,
   warn_overflow: int,
+  nv_static: int = 0,
 ):
   """Factory for iterative linesearch kernel.
 
@@ -945,12 +946,14 @@ def _linesearch_iterative_kernel(
     is_sparse: Use sparse matrix representation for constraint Jacobian.
     incremental: Use incremental linesearch updates.
     warn_overflow: Overflow warning bitmask.
+    nv_static: When > 0, bake DOF count into the fused Jv loop (SO-101 class models).
   """
   LS_ITERATIONS = ls_iterations
   IS_ELLIPTIC = cone_type == types.ConeType.ELLIPTIC
   FUSE_JV = fuse_jv
   INCREMENTAL = incremental
   IS_SPARSE = is_sparse
+  NV_STATIC = nv_static
 
   # Native snippet for CUDA __syncthreads()
   @wp.func_native(snippet="WP_TILE_SYNC();")
@@ -1041,8 +1044,12 @@ def _linesearch_iterative_kernel(
               colind = efc_J_colind_in[worldid, 0, sparseid]
               jv += efc_J_in[worldid, 0, sparseid] * ctx_search_in[worldid, colind]
           else:
-            for i in range(nv):
-              jv += efc_J_in[worldid, efcid, i] * ctx_search_in[worldid, i]
+            if wp.static(NV_STATIC > 0):
+              for i in range(wp.static(NV_STATIC)):
+                jv += efc_J_in[worldid, efcid, i] * ctx_search_in[worldid, i]
+            else:
+              for i in range(nv):
+                jv += efc_J_in[worldid, efcid, i] * ctx_search_in[worldid, i]
           ctx_jv_out[worldid, efcid] = jv
 
       _syncthreads()  # ensure all jv values are written before reading
@@ -1511,6 +1518,8 @@ def _linesearch_iterative(m: types.Model, d: types.Data, ctx: SolverContext, fus
     ctx: SolverContext.
     fuse_jv: Whether jv is computed in-kernel (True) or pre-computed (False).
   """
+  # Bake nv into the fused Jv loop for small dense models (e.g. SO-101 nv<=50).
+  nv_static = int(m.nv) if (fuse_jv and not m.is_sparse and m.nv <= 50) else 0
   wp.launch_tiled(
     _linesearch_iterative_kernel(
       m.opt.ls_iterations,
@@ -1519,6 +1528,7 @@ def _linesearch_iterative(m: types.Model, d: types.Data, ctx: SolverContext, fus
       m.is_sparse,
       _use_incremental(m),
       int(m.opt.warn_overflow),
+      nv_static,
     ),
     dim=d.nworld,
     inputs=[
@@ -4020,22 +4030,29 @@ def _update_gradient(m: types.Model, d: types.Data, ctx: SolverContext, compact:
           block_dim=m.block_dim.update_gradient_JTDAJ_dense,
         )
       else:
-        wp.launch_tiled(
-          _update_gradient_JTDAJ_dense_tiled(m.nv_pad, types.TILE_SIZE_JTDAJ_DENSE, d.njmax, m.M_colind.shape[0]),
-          dim=d.nworld,
-          inputs=[
-            m.M_colind,
-            m.M_hinit_i,
-            d.nefc,
-            m_mat,
-            d.efc.J,
-            d.efc.D,
-            d.efc.state,
-            ctx.done,
-          ],
-          outputs=[ctx.h],
-          block_dim=m.block_dim.update_gradient_JTDAJ_dense,
-        )
+        # Iluvatar: optional ixBLAS strided-batched SGEMM for small dense Newton.
+        from mujoco.mjx.third_party.mujoco_warp._src.ixblas_jtdaj import try_get_stage  # noqa: PLC0415
+
+        ix_stage = try_get_stage(m, d.nworld, d.njmax)
+        if ix_stage is not None:
+          ix_stage.launch(d.nefc, m_mat, d.efc.J, d.efc.D, d.efc.state, ctx.done, ctx.h)
+        else:
+          wp.launch_tiled(
+            _update_gradient_JTDAJ_dense_tiled(m.nv_pad, types.TILE_SIZE_JTDAJ_DENSE, d.njmax, m.M_colind.shape[0]),
+            dim=d.nworld,
+            inputs=[
+              m.M_colind,
+              m.M_hinit_i,
+              d.nefc,
+              m_mat,
+              d.efc.J,
+              d.efc.D,
+              d.efc.state,
+              ctx.done,
+            ],
+            outputs=[ctx.h],
+            block_dim=m.block_dim.update_gradient_JTDAJ_dense,
+          )
       if m.nv > _BLOCK_CHOLESKY_DIM:
         # the dense tile zeros padded dofs; the blocked Cholesky needs an identity there
         wp.launch(_padding_h, dim=(d.nworld, m.nv_pad - m.nv), inputs=[m.nv, ctx.done], outputs=[ctx.h])

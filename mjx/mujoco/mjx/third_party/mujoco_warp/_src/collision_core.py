@@ -50,6 +50,8 @@ class Geom:
   vert: wp.array[wp.vec3]
   graphadr: int
   graph: wp.array[int]
+  extrema: wp.array2d[int]
+  extrema_meshid: int
   mesh_polynum: int
   mesh_polyadr: int
   mesh_polynormal: wp.array[wp.vec3]
@@ -72,6 +74,7 @@ def geom_collision_pair_from_types(
   mesh_graphadr: wp.array[int],
   mesh_vert: wp.array[wp.vec3],
   mesh_graph: wp.array[int],
+  mesh_extrema: wp.array2d[int],
   mesh_polynum: wp.array[int],
   mesh_polyadr: wp.array[int],
   mesh_polynormal: wp.array[wp.vec3],
@@ -109,6 +112,8 @@ def geom_collision_pair_from_types(
   geom2.normal = wp.vec3(geom2.rot[0, 2], geom2.rot[1, 2], geom2.rot[2, 2])
 
   dataid_setid = worldid % geom_dataid.shape[0]
+  geom1.extrema_meshid = -1
+  geom2.extrema_meshid = -1
 
   if geom_type1 == GeomType.MESH:
     dataid = geom_dataid[dataid_setid, g1]
@@ -117,9 +122,11 @@ def geom_collision_pair_from_types(
     geom1.graphadr = wp.where(dataid >= 0, mesh_graphadr[dataid], -1)
     geom1.mesh_polynum = wp.where(dataid >= 0, mesh_polynum[dataid], -1)
     geom1.mesh_polyadr = wp.where(dataid >= 0, mesh_polyadr[dataid], -1)
+    geom1.extrema_meshid = dataid
 
     geom1.vert = mesh_vert
     geom1.graph = mesh_graph
+    geom1.extrema = mesh_extrema
     geom1.mesh_polynormal = mesh_polynormal
     geom1.mesh_polyvertadr = mesh_polyvertadr
     geom1.mesh_polyvertnum = mesh_polyvertnum
@@ -135,9 +142,11 @@ def geom_collision_pair_from_types(
     geom2.graphadr = wp.where(dataid >= 0, mesh_graphadr[dataid], -1)
     geom2.mesh_polynum = wp.where(dataid >= 0, mesh_polynum[dataid], -1)
     geom2.mesh_polyadr = wp.where(dataid >= 0, mesh_polyadr[dataid], -1)
+    geom2.extrema_meshid = dataid
 
     geom2.vert = mesh_vert
     geom2.graph = mesh_graph
+    geom2.extrema = mesh_extrema
     geom2.mesh_polynormal = mesh_polynormal
     geom2.mesh_polyvertadr = mesh_polyvertadr
     geom2.mesh_polyvertnum = mesh_polyvertnum
@@ -166,6 +175,7 @@ def geom_collision_pair(
   mesh_graphadr: wp.array[int],
   mesh_vert: wp.array[wp.vec3],
   mesh_graph: wp.array[int],
+  mesh_extrema: wp.array2d[int],
   mesh_polynum: wp.array[int],
   mesh_polyadr: wp.array[int],
   mesh_polynormal: wp.array[wp.vec3],
@@ -192,6 +202,7 @@ def geom_collision_pair(
     mesh_graphadr,
     mesh_vert,
     mesh_graph,
+    mesh_extrema,
     mesh_polynum,
     mesh_polyadr,
     mesh_polynormal,

@@ -819,6 +819,7 @@ def _collide_mesh_convex(
   mesh_graphadr: wp.array[int],
   mesh_vert: wp.array[wp.vec3],
   mesh_graph: wp.array[int],
+  mesh_extrema: wp.array2d[int],
   mesh_pos: wp.array[wp.vec3],
   mesh_polynormal: wp.array[wp.vec3],
   mesh_polyvertadr: wp.array[int],
@@ -872,11 +873,13 @@ def _collide_mesh_convex(
   geom1.size = geom_size_val
   geom1.margin = 0.0
   geom1.index = -1
+  geom1.extrema_meshid = did
   geom1.vertadr = wp.where(did >= 0, mesh_vertadr[did], -1)
   geom1.vertnum = wp.where(did >= 0, mesh_vertnum[did], -1)
   geom1.graphadr = wp.where(did >= 0, mesh_graphadr[did], -1)
   geom1.vert = mesh_vert
   geom1.graph = mesh_graph
+  geom1.extrema = mesh_extrema
 
   geom_center = mesh_geom_pos
   if did >= 0:
@@ -1889,6 +1892,7 @@ def _flex_narrowphase(warn_overflow: int):
       geom1.vertnum = dim1 + 1
       geom1.graphadr = -1
       geom1.index = -1
+      geom1.extrema_meshid = -1
 
       geom2 = Geom()
       geom2.pos = wp.vec3(0.0)
@@ -1900,6 +1904,7 @@ def _flex_narrowphase(warn_overflow: int):
       geom2.vertnum = dim2 + 1
       geom2.graphadr = -1
       geom2.index = -1
+      geom2.extrema_meshid = -1
 
       center1 = wp.vec3(0.0)
       for idx in range(dim1 + 1):
@@ -2002,6 +2007,7 @@ def _flex_narrowphase_elem_detect(warn_overflow: int):
     mesh_graphadr: wp.array[int],
     mesh_vert: wp.array[wp.vec3],
     mesh_graph: wp.array[int],
+    mesh_extrema: wp.array2d[int],
     mesh_pos: wp.array[wp.vec3],
     mesh_polynormal: wp.array[wp.vec3],
     mesh_polyvertadr: wp.array[int],
@@ -2074,6 +2080,7 @@ def _flex_narrowphase_elem_detect(warn_overflow: int):
     geom2.rot = wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
     geom2.margin = 0.0
     geom2.index = -1
+    geom2.extrema_meshid = -1
 
     centroid = wp.vec3(0.0, 0.0, 0.0)
     r_elem = float(0.0)
@@ -2349,6 +2356,7 @@ def _flex_narrowphase_elem_detect(warn_overflow: int):
           mesh_graphadr,
           mesh_vert,
           mesh_graph,
+          mesh_extrema,
           mesh_pos,
           mesh_polynormal,
           mesh_polyvertadr,
@@ -2507,6 +2515,7 @@ def _flex_narrowphase_elem_detect(warn_overflow: int):
         geom1.size = geom_size_val
         geom1.margin = 0.0
         geom1.index = -1
+        geom1.extrema_meshid = -1
 
         r_geom = wp.length(geom_size_val)
         if wp.length(centroid - geom_pos) <= r_geom + r_elem + margin + elem_radius + 0.04:
@@ -3863,6 +3872,7 @@ def _detect_elem_geom_candidates(
       m.mesh_graphadr,
       m.mesh_vert,
       m.mesh_graph,
+      m.mesh_extrema,
       m.mesh_pos,
       m.mesh_polynormal,
       m.mesh_polyvertadr,

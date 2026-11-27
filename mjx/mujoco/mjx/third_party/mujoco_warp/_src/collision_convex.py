@@ -190,6 +190,7 @@ def _hfield_filter(
   mesh_graphadr: wp.array[int],
   mesh_vert: wp.array[wp.vec3],
   mesh_graph: wp.array[int],
+  mesh_extrema: wp.array2d[int],
   hfield_size: wp.array[wp.vec4],
   # Data in:
   geom_xpos_in: wp.array2d[wp.vec3],
@@ -245,6 +246,7 @@ def _hfield_filter(
   geom2.size = geom_size[size_id, g2]
   geom2.margin = 0.0  # margin handled separately
   geom2.index = -1
+  geom2.extrema_meshid = -1
 
   geomtype2 = geom_type[g2]
 
@@ -256,6 +258,8 @@ def _hfield_filter(
     geom2.graphadr = wp.where(dataid >= 0, mesh_graphadr[dataid], -1)
     geom2.vert = mesh_vert
     geom2.graph = mesh_graph
+    geom2.extrema = mesh_extrema
+    geom2.extrema_meshid = dataid
 
   # use support functions for tight AABB bounds
   xmax = support(geom2, geomtype2, wp.vec3(1.0, 0.0, 0.0)).point[0]
@@ -313,6 +317,7 @@ def ccd_hfield_kernel_builder(
     mesh_graphadr: wp.array[int],
     mesh_vert: wp.array[wp.vec3],
     mesh_graph: wp.array[int],
+    mesh_extrema: wp.array2d[int],
     mesh_polynum: wp.array[int],
     mesh_polyadr: wp.array[int],
     mesh_polynormal: wp.array[wp.vec3],
@@ -399,6 +404,7 @@ def ccd_hfield_kernel_builder(
       mesh_graphadr,
       mesh_vert,
       mesh_graph,
+      mesh_extrema,
       hfield_size,
       geom_xpos_in,
       geom_xmat_in,
@@ -453,6 +459,7 @@ def ccd_hfield_kernel_builder(
       mesh_graphadr,
       mesh_vert,
       mesh_graph,
+      mesh_extrema,
       mesh_polynum,
       mesh_polyadr,
       mesh_polynormal,
@@ -1181,6 +1188,7 @@ def ccd_kernel_builder(
     mesh_graphadr: wp.array[int],
     mesh_vert: wp.array[wp.vec3],
     mesh_graph: wp.array[int],
+    mesh_extrema: wp.array2d[int],
     mesh_polynum: wp.array[int],
     mesh_polyadr: wp.array[int],
     mesh_polynormal: wp.array[wp.vec3],
@@ -1260,6 +1268,7 @@ def ccd_kernel_builder(
         mesh_graphadr,
         mesh_vert,
         mesh_graph,
+        mesh_extrema,
         mesh_polynum,
         mesh_polyadr,
         mesh_polynormal,
@@ -1461,6 +1470,7 @@ def convex_narrowphase(m: Model, d: Data, ctx: CollisionContext, collision_table
           m.mesh_graphadr,
           m.mesh_vert,
           m.mesh_graph,
+          m.mesh_extrema,
           m.mesh_polynum,
           m.mesh_polyadr,
           m.mesh_polynormal,
@@ -1566,6 +1576,7 @@ def convex_narrowphase(m: Model, d: Data, ctx: CollisionContext, collision_table
           m.mesh_graphadr,
           m.mesh_vert,
           m.mesh_graph,
+          m.mesh_extrema,
           m.mesh_polynum,
           m.mesh_polyadr,
           m.mesh_polynormal,
