@@ -59,6 +59,124 @@ vec_maxconpair = wp.types.vector(length=MJ_MAXCONPAIR, dtype=float)
 mat_maxconpair = wp.types.matrix(shape=(MJ_MAXCONPAIR, 3), dtype=float)
 
 
+@wp.struct
+class CoreXCCDOutputs:
+  contact_dist: wp.array[float]
+  contact_pos: wp.array[wp.vec3]
+  contact_frame: wp.array[wp.mat33]
+  contact_includemargin: wp.array[float]
+  contact_friction: wp.array[vec5]
+  contact_solref: wp.array[wp.vec2]
+  contact_solreffriction: wp.array[wp.vec2]
+  contact_solimp: wp.array[vec5]
+  contact_dim: wp.array[int]
+  contact_geom: wp.array[wp.vec2i]
+  contact_efc_address: wp.array2d[int]
+  contact_worldid: wp.array[int]
+  contact_type: wp.array[int]
+  contact_geomcollisionid: wp.array[int]
+  contact_adhesion: wp.array[float]
+  nacon: wp.array[int]
+  overflow: wp.array[int]
+
+
+@wp.kernel(enable_backward=False)
+def _pack_corex_ccd_outputs(
+  contact_dist: wp.array[float],
+  contact_pos: wp.array[wp.vec3],
+  contact_frame: wp.array[wp.mat33],
+  contact_includemargin: wp.array[float],
+  contact_friction: wp.array[vec5],
+  contact_solref: wp.array[wp.vec2],
+  contact_solreffriction: wp.array[wp.vec2],
+  contact_solimp: wp.array[vec5],
+  contact_dim: wp.array[int],
+  contact_geom: wp.array[wp.vec2i],
+  contact_efc_address: wp.array2d[int],
+  contact_worldid: wp.array[int],
+  contact_type: wp.array[int],
+  contact_geomcollisionid: wp.array[int],
+  contact_adhesion: wp.array[float],
+  nacon: wp.array[int],
+  overflow: wp.array[int],
+  out: wp.array[CoreXCCDOutputs],
+):
+  desc = CoreXCCDOutputs()
+  desc.contact_dist = contact_dist
+  desc.contact_pos = contact_pos
+  desc.contact_frame = contact_frame
+  desc.contact_includemargin = contact_includemargin
+  desc.contact_friction = contact_friction
+  desc.contact_solref = contact_solref
+  desc.contact_solreffriction = contact_solreffriction
+  desc.contact_solimp = contact_solimp
+  desc.contact_dim = contact_dim
+  desc.contact_geom = contact_geom
+  desc.contact_efc_address = contact_efc_address
+  desc.contact_worldid = contact_worldid
+  desc.contact_type = contact_type
+  desc.contact_geomcollisionid = contact_geomcollisionid
+  desc.contact_adhesion = contact_adhesion
+  desc.nacon = nacon
+  desc.overflow = overflow
+  out[0] = desc
+
+
+def _get_corex_ccd_outputs(d: Data) -> wp.array:
+  ptrs = (
+    d.contact.dist.ptr,
+    d.contact.pos.ptr,
+    d.contact.frame.ptr,
+    d.contact.includemargin.ptr,
+    d.contact.friction.ptr,
+    d.contact.solref.ptr,
+    d.contact.solreffriction.ptr,
+    d.contact.solimp.ptr,
+    d.contact.dim.ptr,
+    d.contact.geom.ptr,
+    d.contact.efc_address.ptr,
+    d.contact.worldid.ptr,
+    d.contact.type.ptr,
+    d.contact.geomcollisionid.ptr,
+    d.contact.adhesion.ptr,
+    d.nacon.ptr,
+    d.overflow.ptr,
+  )
+  if getattr(d, "_corex_ccd_output_ptrs", None) != ptrs:
+    dev = d.ncollision.device
+    buf = getattr(d, "_corex_ccd_outputs", None)
+    if buf is None or buf.device != dev:
+      buf = wp.empty(1, dtype=CoreXCCDOutputs, device=dev)
+      d._corex_ccd_outputs = buf
+    wp.launch(
+      _pack_corex_ccd_outputs,
+      dim=1,
+      inputs=[
+        d.contact.dist,
+        d.contact.pos,
+        d.contact.frame,
+        d.contact.includemargin,
+        d.contact.friction,
+        d.contact.solref,
+        d.contact.solreffriction,
+        d.contact.solimp,
+        d.contact.dim,
+        d.contact.geom,
+        d.contact.efc_address,
+        d.contact.worldid,
+        d.contact.type,
+        d.contact.geomcollisionid,
+        d.contact.adhesion,
+        d.nacon,
+        d.overflow,
+      ],
+      outputs=[buf],
+      device=dev,
+    )
+    d._corex_ccd_output_ptrs = ptrs
+  return d._corex_ccd_outputs
+
+
 @wp.func
 def _hfield_filter(
   # Model:
@@ -235,25 +353,27 @@ def ccd_hfield_kernel_builder(
     epa_horizon_in: wp.array2d[int],
     nccd_in: wp.array[int],
     # Data out:
-    contact_dist_out: wp.array[float],
-    contact_pos_out: wp.array[wp.vec3],
-    contact_frame_out: wp.array[wp.mat33],
-    contact_includemargin_out: wp.array[float],
-    contact_friction_out: wp.array[vec5],
-    contact_solref_out: wp.array[wp.vec2],
-    contact_solreffriction_out: wp.array[wp.vec2],
-    contact_solimp_out: wp.array[vec5],
-    contact_dim_out: wp.array[int],
-    contact_geom_out: wp.array[wp.vec2i],
-    contact_efc_address_out: wp.array2d[int],
-    contact_worldid_out: wp.array[int],
-    contact_type_out: wp.array[int],
-    contact_geomcollisionid_out: wp.array[int],
-    contact_adhesion_out: wp.array[float],
-    nacon_out: wp.array[int],
-    # Data out:
-    overflow_out: wp.array[int],
+    ccd_out_in: wp.array[CoreXCCDOutputs],
   ):
+    ccd_out = ccd_out_in[0]
+    contact_dist_out = ccd_out.contact_dist
+    contact_pos_out = ccd_out.contact_pos
+    contact_frame_out = ccd_out.contact_frame
+    contact_includemargin_out = ccd_out.contact_includemargin
+    contact_friction_out = ccd_out.contact_friction
+    contact_solref_out = ccd_out.contact_solref
+    contact_solreffriction_out = ccd_out.contact_solreffriction
+    contact_solimp_out = ccd_out.contact_solimp
+    contact_dim_out = ccd_out.contact_dim
+    contact_geom_out = ccd_out.contact_geom
+    contact_efc_address_out = ccd_out.contact_efc_address
+    contact_worldid_out = ccd_out.contact_worldid
+    contact_type_out = ccd_out.contact_type
+    contact_geomcollisionid_out = ccd_out.contact_geomcollisionid
+    contact_adhesion_out = ccd_out.contact_adhesion
+    nacon_out = ccd_out.nacon
+    overflow_out = ccd_out.overflow
+
     collisionid = wp.tid()
     if collisionid >= ncollision_in[0]:
       return
@@ -1108,25 +1228,9 @@ def ccd_kernel_builder(
     multiccd_face2_in: wp.array2d[wp.vec3],
     nccd_in: wp.array[int],
     # Data out:
-    contact_dist_out: wp.array[float],
-    contact_pos_out: wp.array[wp.vec3],
-    contact_frame_out: wp.array[wp.mat33],
-    contact_includemargin_out: wp.array[float],
-    contact_friction_out: wp.array[vec5],
-    contact_solref_out: wp.array[wp.vec2],
-    contact_solreffriction_out: wp.array[wp.vec2],
-    contact_solimp_out: wp.array[vec5],
-    contact_dim_out: wp.array[int],
-    contact_geom_out: wp.array[wp.vec2i],
-    contact_efc_address_out: wp.array2d[int],
-    contact_worldid_out: wp.array[int],
-    contact_type_out: wp.array[int],
-    contact_geomcollisionid_out: wp.array[int],
-    contact_adhesion_out: wp.array[float],
-    nacon_out: wp.array[int],
-    # Data out:
-    overflow_out: wp.array[int],
+    ccd_out_in: wp.array[CoreXCCDOutputs],
   ):
+    ccd_out = ccd_out_in[0]
     tid = wp.tid()
     for collisionid in range(tid, wp.min(ncollision_in[0], naconmax_in), grid_stride_in):
       geoms = collision_pair_in[collisionid]
@@ -1215,23 +1319,23 @@ def ccd_kernel_builder(
         margin,
         gap,
         pairid,
-        contact_dist_out,
-        contact_pos_out,
-        contact_frame_out,
-        contact_includemargin_out,
-        contact_friction_out,
-        contact_solref_out,
-        contact_solreffriction_out,
-        contact_solimp_out,
-        contact_dim_out,
-        contact_geom_out,
-        contact_efc_address_out,
-        contact_worldid_out,
-        contact_type_out,
-        contact_geomcollisionid_out,
-        contact_adhesion_out,
-        nacon_out,
-        overflow_out,
+        ccd_out.contact_dist,
+        ccd_out.contact_pos,
+        ccd_out.contact_frame,
+        ccd_out.contact_includemargin,
+        ccd_out.contact_friction,
+        ccd_out.contact_solref,
+        ccd_out.contact_solreffriction,
+        ccd_out.contact_solimp,
+        ccd_out.contact_dim,
+        ccd_out.contact_geom,
+        ccd_out.contact_efc_address,
+        ccd_out.contact_worldid,
+        ccd_out.contact_type,
+        ccd_out.contact_geomcollisionid,
+        ccd_out.contact_adhesion,
+        ccd_out.nacon,
+        ccd_out.overflow,
       )
 
   return ccd_kernel
@@ -1323,27 +1427,12 @@ def convex_narrowphase(m: Model, d: Data, ctx: CollisionContext, collision_table
   # epa_horizon: index pair (i j) of edges on horizon
   epa_horizon = wp.empty(shape=(d.naccdmax, MJ_MAX_EPAHORIZON), dtype=int)
 
-  # Contact outputs
-  contact_outputs = [
-    d.contact.dist,
-    d.contact.pos,
-    d.contact.frame,
-    d.contact.includemargin,
-    d.contact.friction,
-    d.contact.solref,
-    d.contact.solreffriction,
-    d.contact.solimp,
-    d.contact.dim,
-    d.contact.geom,
-    d.contact.efc_address,
-    d.contact.worldid,
-    d.contact.type,
-    d.contact.geomcollisionid,
-    d.contact.adhesion,
-    d.nacon,
-  ]
+  # CoreX 5.0 (ivcore11): pack contact + counter array descriptors into one
+  # device struct so both ccd_hfield_kernel and ccd_kernel stay well below the
+  # 4096-byte kernarg limit.
+  ccd_outputs = [_get_corex_ccd_outputs(d)]
 
-  # Launch heightfield collision kernels (no multiccd args, 72 args total)
+  # Launch heightfield collision kernels (no multiccd args)
   for geom_pair in collision_table:
     g1 = geom_pair[0].value
     g2 = geom_pair[1].value
@@ -1410,7 +1499,7 @@ def convex_narrowphase(m: Model, d: Data, ctx: CollisionContext, collision_table
           epa_horizon,
           nccd,
         ],
-        outputs=contact_outputs + [d.overflow],
+        outputs=ccd_outputs,
       )
 
   # Allocate multiccd arrays only for non-heightfield collisions
@@ -1437,7 +1526,7 @@ def convex_narrowphase(m: Model, d: Data, ctx: CollisionContext, collision_table
   # multiccd_face2: contact face
   multiccd_face2 = wp.empty(shape=(d.naccdmax, npolygonmax), dtype=wp.vec3)
 
-  # Launch non-heightfield collision kernels (no hfield args, 78 args total)
+  # Launch non-heightfield collision kernels (no hfield args)
   for geom_pair in collision_table:
     g1 = geom_pair[0].value
     g2 = geom_pair[1].value
@@ -1522,5 +1611,5 @@ def convex_narrowphase(m: Model, d: Data, ctx: CollisionContext, collision_table
           multiccd_face2,
           nccd,
         ],
-        outputs=contact_outputs + [d.overflow],
+        outputs=ccd_outputs,
       )
