@@ -121,7 +121,18 @@ def _sphere_filter(size1: float, size2: float, margin1: float, margin2: float, x
   return dist_sq <= bound * bound
 
 
-# TODO(team): improve performance by precomputing bounding box
+# World AABB half-extents via axis projection (avoids enumerating eight corners).
+# Further win: precompute per-geom world AABBs once per step when pair fan-out is large.
+@wp.func
+def _obb_world_aabb_extent(rot: wp.mat33, size: wp.vec3) -> wp.vec3:
+  """Half-extents of the world-axis AABB of an oriented box (Ericson §4.2)."""
+  return wp.vec3(
+    wp.abs(rot[0, 0]) * size[0] + wp.abs(rot[0, 1]) * size[1] + wp.abs(rot[0, 2]) * size[2],
+    wp.abs(rot[1, 0]) * size[0] + wp.abs(rot[1, 1]) * size[1] + wp.abs(rot[1, 2]) * size[2],
+    wp.abs(rot[2, 0]) * size[0] + wp.abs(rot[2, 1]) * size[1] + wp.abs(rot[2, 2]) * size[2],
+  )
+
+
 @wp.func
 def _aabb_filter(
   # In:
@@ -140,84 +151,28 @@ def _aabb_filter(
 
   references: see Ericson, Real-time Collision Detection section 4.2.
               filterBox: filter contact based on global AABBs.
+
+  Uses projected OBB extents instead of enumerating eight corners per geom.
   """
   center1 = xmat1 @ center1 + xpos1
   center2 = xmat2 @ center2 + xpos2
 
   margin = margin1 + margin2
+  e1 = _obb_world_aabb_extent(xmat1, size1)
+  e2 = _obb_world_aabb_extent(xmat2, size2)
 
-  max_x1 = -MJ_MAXVAL
-  max_y1 = -MJ_MAXVAL
-  max_z1 = -MJ_MAXVAL
-  min_x1 = MJ_MAXVAL
-  min_y1 = MJ_MAXVAL
-  min_z1 = MJ_MAXVAL
-
-  max_x2 = -MJ_MAXVAL
-  max_y2 = -MJ_MAXVAL
-  max_z2 = -MJ_MAXVAL
-  min_x2 = MJ_MAXVAL
-  min_y2 = MJ_MAXVAL
-  min_z2 = MJ_MAXVAL
-
-  sign = wp.vec2(-1.0, 1.0)
-
-  for i in range(2):
-    for j in range(2):
-      for k in range(2):
-        corner1 = wp.vec3(sign[i] * size1[0], sign[j] * size1[1], sign[k] * size1[2])
-        pos1 = xmat1 @ corner1
-
-        corner2 = wp.vec3(sign[i] * size2[0], sign[j] * size2[1], sign[k] * size2[2])
-        pos2 = xmat2 @ corner2
-
-        if pos1[0] > max_x1:
-          max_x1 = pos1[0]
-
-        if pos1[1] > max_y1:
-          max_y1 = pos1[1]
-
-        if pos1[2] > max_z1:
-          max_z1 = pos1[2]
-
-        if pos1[0] < min_x1:
-          min_x1 = pos1[0]
-
-        if pos1[1] < min_y1:
-          min_y1 = pos1[1]
-
-        if pos1[2] < min_z1:
-          min_z1 = pos1[2]
-
-        if pos2[0] > max_x2:
-          max_x2 = pos2[0]
-
-        if pos2[1] > max_y2:
-          max_y2 = pos2[1]
-
-        if pos2[2] > max_z2:
-          max_z2 = pos2[2]
-
-        if pos2[0] < min_x2:
-          min_x2 = pos2[0]
-
-        if pos2[1] < min_y2:
-          min_y2 = pos2[1]
-
-        if pos2[2] < min_z2:
-          min_z2 = pos2[2]
-
-  if center1[0] + max_x1 + margin < center2[0] + min_x2:
+  # Same six tests as the previous corner expansion (max=+e, min=-e).
+  if center1[0] + e1[0] + margin < center2[0] - e2[0]:
     return False
-  if center1[1] + max_y1 + margin < center2[1] + min_y2:
+  if center1[1] + e1[1] + margin < center2[1] - e2[1]:
     return False
-  if center1[2] + max_z1 + margin < center2[2] + min_z2:
+  if center1[2] + e1[2] + margin < center2[2] - e2[2]:
     return False
-  if center2[0] + max_x2 + margin < center1[0] + min_x1:
+  if center2[0] + e2[0] + margin < center1[0] - e1[0]:
     return False
-  if center2[1] + max_y2 + margin < center1[1] + min_y1:
+  if center2[1] + e2[1] + margin < center1[1] - e1[1]:
     return False
-  if center2[2] + max_z2 + margin < center1[2] + min_z1:
+  if center2[2] + e2[2] + margin < center1[2] - e1[2]:
     return False
 
   return True

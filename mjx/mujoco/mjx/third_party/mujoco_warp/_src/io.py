@@ -727,6 +727,9 @@ def put_model(mjm: mujoco.MjModel, batch_sizes: dict[str, int] | None = None) ->
 
   # create model
   m = types.Model(**{f.name: getattr(mjm, f.name, None) for f in dataclasses.fields(types.Model)})
+  # mesh_extrema (3x3x3 hill-climb seeds) may be absent on older MuJoCo builds.
+  if getattr(m, "mesh_extrema", None) is None:
+    m.mesh_extrema = np.zeros((mjm.nmesh, 27), dtype=np.int32)
   # TODO(team): remove version check once mujoco >= 3.16.1 is required.
   if not util_pkg.check_version("mujoco>=3.16.1"):
     m.eq_data = np.pad(mjm.eq_data, ((0, 0), (0, 1)))
@@ -1514,6 +1517,20 @@ def put_model(mjm: mujoco.MjModel, batch_sizes: dict[str, int] | None = None) ->
     elemid = M_elemid[np.maximum(gi, gj), np.minimum(gi, gj)]  # (nblock, sz, sz), -1 if absent
     elemid = np.where(elemid >= 0, elemid, mjm.nC)
     tile.elemid = wp.array(elemid.reshape(-1).astype(np.int32), dtype=int)
+    # Detect affine packed-triangle gathers: elemid[b,i,j] == base_b + pack(min(i,j), max(i,j)).
+    # chain32's single dense inertia block matches base=0; densify can then stream the contiguous
+    # packed segment instead of size**2 indexed loads (large win on BI-V150).
+    ii = np.minimum(np.arange(sz)[:, None], np.arange(sz)[None, :])
+    jj = np.maximum(np.arange(sz)[:, None], np.arange(sz)[None, :])
+    pack = jj * (jj + 1) // 2 + ii  # (sz, sz)
+    bases = elemid[:, 0, 0]
+    expected = bases[:, None, None] + pack[None, :, :]
+    pack_len = sz * (sz + 1) // 2
+    tile.packed_tri = bool(
+      elemid.shape[0] > 0
+      and np.all((bases >= 0) & (bases + pack_len <= mjm.nC))
+      and np.array_equal(elemid, expected)
+    )
 
   # indices for sparse qD_fullm (used in RNE derivatives)
   # D-structure is the full square sparsity pattern (both upper and lower triangle)

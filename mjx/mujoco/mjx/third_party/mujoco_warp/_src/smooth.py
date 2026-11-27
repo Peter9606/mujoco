@@ -14,7 +14,7 @@
 # ==============================================================================
 
 
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import warp as wp
 
@@ -1602,18 +1602,45 @@ def _small_cholesky_factorize_block(block_size: int):
   return kernel
 
 
+@wp.func_native("""
+A.data(wp::tile_coord(i, j)) = val;
+""")
+def _tile_set2d_nosync(A: Any, i: int, j: int, val: float):
+  """Write ``A[i, j] = val`` without a per-element barrier; caller must follow with ``_tile_sync``."""
+  ...
+
+
+@wp.func_native("""
+WP_TILE_SYNC();
+""")
+def _tile_sync():
+  """Tile-wide synchronization barrier across ``WP_TILE_BLOCK_DIM`` lanes."""
+  ...
+
+
+@wp.func
+def _unpack_tri_col(step: int) -> int:
+  """Column j in [0, N) for packed upper-triangle step = j*(j+1)//2 + i (0 <= i <= j)."""
+  col = wp.int((wp.sqrt(wp.float(8 * step + 1)) - 1.0) * 0.5)
+  if (col + 1) * (col + 2) // 2 <= step:
+    col = col + 1
+  elif col * (col + 1) // 2 > step:
+    col = col - 1
+  return col
+
+
 @cache_kernel
-def _tile_cholesky_factorize_block(tile: TileSet):
+def _tile_cholesky_factorize_block(block_size: int, packed_tri: bool):
   # One diagonal block of `block_size` dofs per (world, block) tile group. tile_load_indexed gathers
   # the block's dense slots from CSR via a precomputed per-slot index tile (block_elemid, laid out
   # [block, slot]); structurally absent pairs carry an out-of-bounds index that reads as 0.
   # Tile shapes must be compile-time constants, so the densify is inlined per kernel (sharing via a
   # wp.func is not possible) -- keep it in sync with _tile_cholesky_factorize_solve_block.
-  block_size = tile.size
   block_area = block_size * block_size
+  pack_len = block_size * (block_size + 1) // 2
 
   @wp.kernel(module="unique", enable_backward=False)
-  def kernel(
+  def kernel_indexed(
     # Model:
     qLD_block_adr: wp.array[int],
     # Data in:
@@ -1634,7 +1661,39 @@ def _tile_cholesky_factorize_block(tile: TileSet):
     wp.tile_cholesky_inplace(L, fill_mode="upper")
     wp.tile_store(L_out[worldid], wp.tile_reshape(L, (block_area,)), offset=(qLD_block_adr[start],))
 
-  return kernel
+  @wp.kernel(module="unique", enable_backward=False)
+  def kernel_packed(
+    # Model:
+    qLD_block_adr: wp.array[int],
+    # Data in:
+    M_in: wp.array2d[float],
+    # In:
+    block_elemid: wp.array[int],
+    block_dof: wp.array[int],
+    # Out:
+    L_out: wp.array2d[float],
+  ):
+    worldid, blk, lane = wp.tid()
+    start = block_dof[blk]
+    # Affine pack: elemid[0,0] is the base CSR address of this block's triangle.
+    base = block_elemid[blk * block_area]
+    packed = wp.tile_load(M_in[worldid], shape=(pack_len,), offset=(base,), storage="shared")
+    L = wp.tile_zeros(shape=(block_size, block_size), dtype=float, storage="shared")
+    lanes = wp.block_dim()
+    upper_count = wp.static(pack_len)
+    for step in range(lane, upper_count, lanes):
+      col = _unpack_tri_col(step)
+      row = step - col * (col + 1) // 2
+      val = packed[step]
+      # Fill both triangles without intra-loop barriers (unique (row, col) per step);
+      # fast_cholesky_factor_warp0(Upper=True) reads L[col, row] and scalar_cholesky_impl reads L[row, col].
+      _tile_set2d_nosync(L, row, col, val)
+      _tile_set2d_nosync(L, col, row, val)
+    _tile_sync()
+    wp.tile_cholesky_inplace(L, fill_mode="upper")
+    wp.tile_store(L_out[worldid], wp.tile_reshape(L, (block_area,)), offset=(qLD_block_adr[start],))
+
+  return kernel_packed if packed_tri else kernel_indexed
 
 
 def _factor_blocks(
@@ -1655,7 +1714,7 @@ def _factor_blocks(
       )
     else:
       wp.launch_tiled(
-        _tile_cholesky_factorize_block(tile),
+        _tile_cholesky_factorize_block(tile.size, tile.packed_tri),
         dim=(d.nworld, tile.adr.size),
         inputs=[m.qLD_block_adr, M, tile.elemid, tile.adr],
         outputs=[L],
@@ -4124,9 +4183,8 @@ def _small_cholesky_solve_block(block_size: int):
 
 
 @cache_kernel
-def _tile_cholesky_solve_block(tile: TileSet):
+def _tile_cholesky_solve_block(block_size: int):
   # One diagonal block per (world, block) thread group; no densify, so a 2D grid suffices.
-  block_size = tile.size
   block_area = block_size * block_size
 
   @wp.kernel(module="unique", enable_backward=False)
@@ -4176,7 +4234,7 @@ def _solve_blocks(
       _min_block = 64 if (wp.get_device().is_cuda and wp.get_device().runtime.is_iluvatar) else 32
       block_dim = m.block_dim.cholesky_solve if tile.size <= 40 else _min_block
       wp.launch_tiled(
-        _tile_cholesky_solve_block(tile),
+        _tile_cholesky_solve_block(tile.size),
         dim=(d.nworld, tile.adr.size),
         inputs=[m.qLD_block_adr, tile.adr, L, y],
         outputs=[x],
@@ -4240,14 +4298,14 @@ def solve_m(m: Model, d: Data, x: wp.array2d[float], y: wp.array2d[float], x_scr
 
 
 @cache_kernel
-def _tile_cholesky_factorize_solve_block(tile: TileSet):
+def _tile_cholesky_factorize_solve_block(block_size: int, packed_tri: bool):
   # Fused factor+solve: densify the block, factor it, and back-substitute in one launch (avoids
   # re-loading the factor). Grid/densify structure matches _tile_cholesky_factorize_block.
-  block_size = tile.size
   block_area = block_size * block_size
+  pack_len = block_size * (block_size + 1) // 2
 
   @wp.kernel(module="unique", enable_backward=False)
-  def kernel(
+  def kernel_indexed(
     # Model:
     qLD_block_adr: wp.array[int],
     # Data in:
@@ -4275,7 +4333,42 @@ def _tile_cholesky_factorize_solve_block(tile: TileSet):
     sol = wp.tile_cholesky_solve(L, rhs, fill_mode="upper")
     wp.tile_store(x[worldid], sol, offset=(start,))
 
-  return kernel
+  @wp.kernel(module="unique", enable_backward=False)
+  def kernel_packed(
+    # Model:
+    qLD_block_adr: wp.array[int],
+    # Data in:
+    M_in: wp.array2d[float],
+    # In:
+    block_elemid: wp.array[int],
+    block_dof: wp.array[int],
+    y: wp.array2d[float],
+    x: wp.array2d[float],
+    # Out:
+    L_out: wp.array2d[float],
+  ):
+    worldid, blk, lane = wp.tid()
+    start = block_dof[blk]
+    base = block_elemid[blk * block_area]
+    packed = wp.tile_load(M_in[worldid], shape=(pack_len,), offset=(base,), storage="shared")
+    L = wp.tile_zeros(shape=(block_size, block_size), dtype=float, storage="shared")
+    lanes = wp.block_dim()
+    upper_count = wp.static(pack_len)
+    for step in range(lane, upper_count, lanes):
+      col = _unpack_tri_col(step)
+      row = step - col * (col + 1) // 2
+      val = packed[step]
+      _tile_set2d_nosync(L, row, col, val)
+      _tile_set2d_nosync(L, col, row, val)
+    _tile_sync()
+    wp.tile_cholesky_inplace(L, fill_mode="upper")
+    wp.tile_store(L_out[worldid], wp.tile_reshape(L, (block_area,)), offset=(qLD_block_adr[start],))
+
+    rhs = wp.tile_load(y[worldid], shape=(block_size,), offset=(start,))
+    sol = wp.tile_cholesky_solve(L, rhs, fill_mode="upper")
+    wp.tile_store(x[worldid], sol, offset=(start,))
+
+  return kernel_packed if packed_tri else kernel_indexed
 
 
 @cache_kernel
@@ -4356,7 +4449,7 @@ def _factor_solve_blocks(
       )
     else:
       wp.launch_tiled(
-        _tile_cholesky_factorize_solve_block(tile),
+        _tile_cholesky_factorize_solve_block(tile.size, tile.packed_tri),
         dim=(d.nworld, tile.adr.size),
         inputs=[m.qLD_block_adr, M, tile.elemid, tile.adr, y],
         outputs=[x, L],

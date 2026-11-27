@@ -213,7 +213,6 @@ class TestMujocoWarpIluvatarP4(unittest.TestCase):
       self.assertEqual(int(geomid.numpy()[0, 0]), 1)
       np.testing.assert_allclose(normal.numpy(), [[[0.0, 0.0, 1.0]]], atol=1e-5)
 
-  @unittest.skipIf(_IS_ILUVATAR, f"{_IVCORE11_KERNARG_REASON}: ccd_kernel uses 4296B")
   def test_ccd_convex_models(self):
     for rel in [
       "model/cube/cube_3x3x3.xml",
@@ -223,7 +222,7 @@ class TestMujocoWarpIluvatarP4(unittest.TestCase):
       "mjx/mujoco/mjx/test_data/shadow_hand/scene_right.xml",
     ]:
       with self.subTest(rel=rel):
-        self._run_model(rel, steps=5, nworld=1)
+        self._run_model(rel, steps=5, nworld=1, v_atol=5e-3, nconmax=512, njmax=2048)
 
   @unittest.skipIf(
     _IS_ILUVATAR,

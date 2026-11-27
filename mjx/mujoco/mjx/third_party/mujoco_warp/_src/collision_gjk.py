@@ -179,7 +179,19 @@ def support(geom: Geom, geomtype: int, dir: wp.vec3) -> SupportPoint:
       vert_globalid = geom.graphadr + 2 + numvert
       edge_localid = geom.graphadr + 2 + 2 * numvert
       prev = int(-1)
-      imax = wp.where(geom.index > -1, geom.index, 0)
+      # Match CPU mjc_hillclimbSupport: seed from the 3x3x3 extrema table, and
+      # when warm-starting pick the better of the cache vs the grid seed.
+      imax = 0
+      if geom.extrema_meshid >= 0:
+        cx = wp.where(local_dir[0] > 0.4, 1, 0) - wp.where(local_dir[0] < -0.4, 1, 0) + 1
+        cy = wp.where(local_dir[1] > 0.4, 1, 0) - wp.where(local_dir[1] < -0.4, 1, 0) + 1
+        cz = wp.where(local_dir[2] > 0.4, 1, 0) - wp.where(local_dir[2] < -0.4, 1, 0) + 1
+        imax = geom.extrema[geom.extrema_meshid, cx * 9 + cy * 3 + cz]
+      if geom.index > -1:
+        cached_dot = wp.dot(local_dir, geom.vert[geom.vertadr + geom.graph[vert_globalid + geom.index]])
+        seed_dot = wp.dot(local_dir, geom.vert[geom.vertadr + geom.graph[vert_globalid + imax]])
+        if cached_dot > seed_dot:
+          imax = geom.index
       max_dist = wp.dot(local_dir, geom.vert[geom.vertadr + geom.graph[vert_globalid + imax]])
 
       # hillclimb until no change
@@ -190,8 +202,9 @@ def support(geom: Geom, geomtype: int, dir: wp.vec3) -> SupportPoint:
         while subidx >= 0:
           idx = geom.graph[vert_globalid + subidx]
           dist = wp.dot(local_dir, geom.vert[geom.vertadr + idx])
-          imax = wp.where(dist > max_dist, subidx, imax)
-          max_dist = wp.where(dist > max_dist, dist, max_dist)
+          if dist > max_dist:
+            max_dist = dist
+            imax = subidx
           i += 1
           subidx = geom.graph[edge_localid + i]
 
